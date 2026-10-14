@@ -1,0 +1,19 @@
+# Swift
+macos/.build/
+macos/.swiftpm/
+*.xcodeproj
+
+# .NET
+windows/bin/
+windows/obj/
+
+# Android / Gradle
+android/.gradle/
+android/build/
+android/app/build/
+android/.kotlin/
+android/local.properties
+
+# OS / editor
+.DS_Store
+*.swp

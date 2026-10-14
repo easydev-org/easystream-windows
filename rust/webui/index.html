@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <title>easystream</title>
+    <style>
+      :root {
+        --bar: #101010d9; --fg: #eee; --bd: #333; --acc: #fab283; --screenbg: #4a4a4a;
+        --ok: #4ade80; --err: #f87171; --kbdw: min(360px, 88vw);
+      }
+      * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+      html, body {
+        margin: 0; height: 100%; overflow: hidden; background: #4a4a4a; color: var(--fg);
+        font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, sans-serif;
+        overscroll-behavior: none;
+      }
+      #screen {
+        position: fixed; inset: 0; width: 100%; height: 100%; display: block;
+        cursor: none; touch-action: none; outline: none;
+      }
+      #bar {
+        position: fixed; top: 0; left: 0; right: 0; z-index: 30;
+        display: flex; align-items: center; gap: 6px; padding: 6px 8px;
+        padding-top: calc(6px + env(safe-area-inset-top));
+        background: var(--bar); backdrop-filter: blur(8px);
+        border-bottom: 1px solid var(--bd);
+        transform: translateY(-110%); transition: transform .15s ease;
+      }
+      #bar.show { transform: none; }
+      #bar .grow { flex: 1; }
+      #bar b { letter-spacing: .3px; white-space: nowrap; }
+      #hotzone { position: fixed; top: 0; left: 0; right: 0; height: 8px; z-index: 31; }
+      .badge { border-radius: 4px; padding: 1px 6px; font-size: 11px; white-space: nowrap; }
+      .badge.live { background: #4ade8033; color: var(--ok); }
+      .badge.err { background: #f8717133; color: var(--err); }
+      .badge.wait { background: #8884; color: #aaa; }
+      .micro { font-size: 11px; color: #aaa; }
+      button {
+        background: #ffffff14; color: var(--fg); border: 1px solid var(--bd);
+        border-radius: 8px; padding: 6px 10px; font: inherit; cursor: pointer;
+        white-space: nowrap; min-height: 34px;
+      }
+      button:hover { background: #ffffff26; }
+      button:active { background: var(--acc); color: #000; }
+      button.on { background: var(--acc); color: #000; border-color: var(--acc); }
+      #kbdToggle {
+        position: fixed; left: 12px; z-index: 25;
+        bottom: calc(12px + env(safe-area-inset-bottom));
+        background: var(--bar); border: 1px solid var(--bd); border-radius: 12px;
+        padding: 10px 14px; backdrop-filter: blur(8px); font-size: 16px;
+      }
+      #kbd {
+        position: fixed; left: 0; top: 0; bottom: 0; width: var(--kbdw); z-index: 26;
+        background: var(--bar); backdrop-filter: blur(12px);
+        border-right: 1px solid var(--bd); padding: 8px;
+        padding-top: calc(8px + env(safe-area-inset-top));
+        padding-bottom: calc(8px + env(safe-area-inset-bottom));
+        overflow-y: auto; -webkit-overflow-scrolling: touch;
+        transform: translateX(-102%); transition: transform .18s ease;
+        display: flex; flex-direction: column; gap: 6px;
+      }
+      #kbd.show { transform: none; }
+      #kbd .head { display: flex; align-items: center; justify-content: space-between; }
+      #kbd h4 { margin: 6px 0 0; font-weight: 600; font-size: 11px; color: #aaa;
+        text-transform: uppercase; letter-spacing: .5px; }
+      #kbd .row { display: flex; gap: 4px; }
+      #kbd .key {
+        flex: 1 1 0; min-width: 0; height: 42px; display: flex; align-items: center;
+        justify-content: center; border: 1px solid var(--bd); border-radius: 8px;
+        background: #ffffff10; user-select: none; cursor: pointer; font-size: 15px;
+      }
+      #kbd .key:active { background: var(--acc); color: #000; }
+      #kbd .key.mod.on { background: var(--acc); color: #000; border-color: var(--acc); }
+      #kbd .key.sm { font-size: 12px; }
+      #kbd .key.wide { flex: 1.7 1 0; }
+      #kbd .key.space { flex: 4 1 0; }
+      #kbd .key.enter { flex: 2 1 0; }
+      #kbd .sticky-badge { font-size: 10px; color: var(--acc); min-height: 14px; }
+      #zoom {
+        position: fixed; right: 12px; z-index: 25;
+        bottom: calc(12px + env(safe-area-inset-bottom));
+        display: flex; flex-direction: column; gap: 6px;
+      }
+      #zoom button { width: 44px; height: 44px; padding: 0; font-size: 18px;
+        background: var(--bar); backdrop-filter: blur(8px); }
+      #zoomLabel { text-align: center; font-size: 10px; color: #bbb; }
+      #ime { position: fixed; left: -9999px; top: 0; width: 10px; height: 10px; opacity: 0; }
+      @media (max-width: 640px) {
+        /* On a phone the keyboard becomes a BOTTOM SHEET (slides up from the
+           bottom, full width) so the screen stays visible above it — the
+           termux/noVNC-mobile pattern. A left drawer would cover the screen. */
+        #kbd {
+          left: 0; right: 0; top: auto; bottom: 0; width: auto;
+          max-height: 62vh; border-right: none; border-top: 1px solid var(--bd);
+          border-radius: 14px 14px 0 0;
+          transform: translateY(102%);
+          box-shadow: 0 -8px 24px #000a;
+        }
+        #kbd.show { transform: none; }
+        #kbd .key { height: 46px; font-size: 16px; }
+        #bar b { display: none; }
+        .micro.hideNarrow { display: none; }
+        #zoom { right: 8px; bottom: calc(12px + env(safe-area-inset-bottom)); }
+        #zoom button { width: 42px; height: 42px; }
+        /* keep the toggle above the sheet when it is open */
+        #kbdToggle { bottom: calc(12px + env(safe-area-inset-bottom)); }
+      }
+      @media (max-height: 420px) {
+        #kbd .key { height: 34px; font-size: 13px; }
+        #kbd h4 { margin-top: 3px; }
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="screen" tabindex="0"></canvas>
+    <div id="hotzone"></div>
+    <div id="bar">
+      <b>easystream</b>
+      <span class="badge wait" id="state">connecting</span>
+      <span class="micro hideNarrow" id="stats">—</span>
+      <span class="grow"></span>
+      <button id="btnKbd">⌨</button>
+      <button id="btnFs">⛶</button>
+      <button id="btnRetry">↻</button>
+    </div>
+    <button id="kbdToggle" title="keyboard">⌨</button>
+    <div id="zoom">
+      <button id="zIn" title="zoom in">＋</button>
+      <button id="zOut" title="zoom out">－</button>
+      <button id="zFit" title="fit" style="font-size:12px">Fit</button>
+      <button id="zOne" title="100%" style="font-size:12px">1:1</button>
+      <span id="zoomLabel">100%</span>
+    </div>
+    <div id="kbd">
+      <div class="head">
+        <b>Keyboard</b>
+        <button id="kbdHide" style="min-height:28px;padding:2px 10px">✕</button>
+      </div>
+      <div class="sticky-badge" id="stickyBadge"></div>
+      <h4>Modifiers</h4>
+      <div class="row" id="mods">
+        <div class="key mod sm" data-mod="Control">Ctrl</div>
+        <div class="key mod sm" data-mod="Alt">Alt</div>
+        <div class="key mod sm" data-mod="Shift">Shift</div>
+        <div class="key mod sm" data-mod="Meta">Meta</div>
+      </div>
+      <h4>Editing</h4>
+      <div class="row">
+        <div class="key sm" data-key="Escape">Esc</div>
+        <div class="key sm" data-key="Tab">Tab</div>
+        <div class="key sm" data-key="Backspace">⌫</div>
+        <div class="key sm" data-key="Delete">Del</div>
+        <div class="key sm" data-key="Insert">Ins</div>
+      </div>
+      <h4>Arrows</h4>
+      <div class="row">
+        <div class="key sm" data-key="Home">Home</div>
+        <div class="key sm" data-key="Up">↑</div>
+        <div class="key sm" data-key="End">End</div>
+      </div>
+      <div class="row">
+        <div class="key sm" data-key="Left">←</div>
+        <div class="key sm" data-key="Down">↓</div>
+        <div class="key sm" data-key="Right">→</div>
+      </div>
+      <div class="row">
+        <div class="key sm" data-key="PageUp">PgUp</div>
+        <div class="key sm" data-key="PageDown">PgDn</div>
+        <div class="key sm" data-key="Return">⏎</div>
+      </div>
+      <h4>Function</h4>
+      <div class="row">
+        <div class="key sm" data-key="F1">F1</div><div class="key sm" data-key="F2">F2</div>
+        <div class="key sm" data-key="F3">F3</div><div class="key sm" data-key="F4">F4</div>
+        <div class="key sm" data-key="F5">F5</div><div class="key sm" data-key="F6">F6</div>
+      </div>
+      <div class="row">
+        <div class="key sm" data-key="F7">F7</div><div class="key sm" data-key="F8">F8</div>
+        <div class="key sm" data-key="F9">F9</div><div class="key sm" data-key="F10">F10</div>
+        <div class="key sm" data-key="F11">F11</div><div class="key sm" data-key="F12">F12</div>
+      </div>
+      <h4>Keyboard</h4>
+      <div class="row" id="rowDigits"></div>
+      <div class="row" id="row1"></div>
+      <div class="row" id="row2"></div>
+      <div class="row" id="row3"></div>
+      <div class="row">
+        <div class="key sm" data-txt="!">!</div>
+        <div class="key sm" data-txt="@">@</div>
+        <div class="key sm" data-txt="#">#</div>
+        <div class="key sm" data-txt="$">$</div>
+        <div class="key sm" data-txt="%">%</div>
+        <div class="key sm" data-txt="&amp;">&amp;</div>
+        <div class="key sm" data-txt="*">*</div>
+        <div class="key sm" data-txt="-">-</div>
+        <div class="key sm" data-txt="_">_</div>
+        <div class="key sm" data-txt="=">=</div>
+      </div>
+      <div class="row">
+        <div class="key sm" data-txt="/">/</div>
+        <div class="key sm" data-txt="\">\</div>
+        <div class="key sm" data-txt="|">|</div>
+        <div class="key sm" data-txt="~">~</div>
+        <div class="key sm" data-txt="`">`</div>
+        <div class="key sm" data-txt="'">'</div>
+        <div class="key sm" data-txt="&quot;">&quot;</div>
+        <div class="key sm" data-txt=":">:</div>
+        <div class="key sm" data-txt=";">;</div>
+        <div class="key sm" data-txt="?">?</div>
+      </div>
+      <div class="row">
+        <div class="key wide sm" data-key="Tab">Tab</div>
+        <div class="key space" data-txt=" ">space</div>
+        <div class="key enter sm" data-key="Return">⏎</div>
+        <div class="key sm" data-key="Backspace">⌫</div>
+      </div>
+      <h4>Text (IME / CJK)</h4>
+      <input id="ime" autocomplete="off" autocapitalize="off" spellcheck="false"
+             placeholder="type here for IME…" style="width:100%;min-height:34px;background:#00000055;color:#eee;border:1px solid var(--bd);border-radius:8px;padding:6px" />
+    </div>
+    <script src="app.js"></script>
+  </body>
+</html>
