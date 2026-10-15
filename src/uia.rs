@@ -162,11 +162,15 @@ impl crate::win::Uia {
     fn element_for_pid(&self, pid: u32) -> Result<IUIAutomationElement, String> {
         unsafe {
             if pid != 0 {
+                // UIA_ProcessIdPropertyId is a VT_I4 (int32); `VARIANT::from(u32)`
+                // produces VT_UI4, which the condition builder rejects with
+                // 0x80070057 ("the parameter is incorrect").
+                let v: windows::core::VARIANT = (pid as i32).into();
                 let cond = self
                     .auto
                     .CreatePropertyCondition(
                         windows::Win32::UI::Accessibility::UIA_ProcessIdPropertyId,
-                        &windows::core::VARIANT::from(pid),
+                        &v,
                     )
                     .map_err(|e| e.to_string())?;
                 let root = self.auto.GetRootElement().map_err(|e| e.to_string())?;
