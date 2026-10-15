@@ -32,6 +32,20 @@ pub fn serve(port: u16, est_port: u16, a11y: A11y) -> Result<(), String> {
             Ok(stream) => {
                 let a11y = Arc::clone(&a11y);
                 thread::spawn(move || {
+                    // COM must be initialised on EVERY thread that touches UIA.
+                    // The daemon initialises MTA on the main thread, but each
+                    // HTTP connection is a fresh thread — without this, UIA
+                    // calls fail with 0x80040201 ("an event was unable to
+                    // invoke any of the subscribers"). MTA matches the main
+                    // thread, so the already-created IUIAutomation can be used
+                    // from here.
+                    #[cfg(windows)]
+                    unsafe {
+                        let _ = windows::Win32::System::Com::CoInitializeEx(
+                            None,
+                            windows::Win32::System::Com::COINIT_MULTITHREADED,
+                        );
+                    }
                     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         if let Err(e) = handle(stream, est_port, a11y) {
                             eprintln!("http: {e}");
