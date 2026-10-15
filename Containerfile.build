@@ -1,0 +1,27 @@
+# Build the easystream daemon (Windows: UIA / WGC / Media Foundation /
+# SendInput) with the SHARED web UI embedded.
+#
+# The UI is not vendored: it is fetched from easydev-org/easystream-webui at
+# build time into rust/webui/, where `include_str!` inlines it.
+ARG REGISTRY=artifact.worker.svc.cluster.local
+FROM ${REGISTRY}/toolchain/rust:latest
+
+ARG WEBUI_REF=main
+ARG HTTPS_PROXY
+ARG HTTP_PROXY
+ENV HTTPS_PROXY=${HTTPS_PROXY} HTTP_PROXY=${HTTP_PROXY} \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# mingw-w64 is the only host tool needed to cross-compile the PE.
+RUN apt-get update && apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+COPY rust/ /src/
+COPY build-webui.sh /src/build-webui.sh
+RUN bash /src/build-webui.sh && ls -la /src/rust/webui
+
+RUN rustup target add x86_64-pc-windows-gnu \
+    && cargo build --release --target x86_64-pc-windows-gnu
+RUN cp /src/target/x86_64-pc-windows-gnu/release/easystream.exe /easystream.exe
