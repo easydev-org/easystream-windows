@@ -208,7 +208,7 @@ impl crate::win::Uia {
             let n = &nodes[i];
             match out {
                 1 => lines.push(format!("{},{},{},{}", n.rect.0, n.rect.1, n.rect.2, n.rect.3)),
-                2 => lines.push(format!("{},{},{}", n.rect.0 + n.rect.2 / 2, n.rect.1 + n.rect.3 / 2, 0)),
+                2 => lines.push(format!("{},{}", n.rect.0 + n.rect.2 / 2, n.rect.1 + n.rect.3 / 2)),
                 3 => lines.push(n.value.clone()),
                 _ => lines.push(format!("{} \"{}\"", n.role, n.name)),
             }
