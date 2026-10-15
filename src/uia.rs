@@ -174,12 +174,14 @@ impl crate::win::Uia {
                 if let Ok(el) = root.FindFirst(TreeScope_Children, &cond) {
                     return Ok(el);
                 }
-                // Fall back to the foreground window's element.
-                let hwnd = windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow();
-                return self.auto.ElementFromHandle(hwnd).map_err(|e| e.to_string());
+                // Fall back to the desktop root (a specific pid can be absent
+                // from the top-level children when its window is a popup).
+                return self.auto.GetRootElement().map_err(|e| e.to_string());
             }
-            let hwnd = windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow();
-            self.auto.ElementFromHandle(hwnd).map_err(|e| e.to_string())
+            // pid=0: the DESKTOP ROOT. `ElementFromHandle(GetForegroundWindow())`
+            // returns UIA_E_ELEMENTNOTAVAILABLE (0x80040201) in this headless
+            // guest — the foreground HWND has no UIA element.
+            self.auto.GetRootElement().map_err(|e| e.to_string())
         }
     }
 
