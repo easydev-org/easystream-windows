@@ -1,5 +1,5 @@
 # The web UI is NOT vendored here: it lives in the single shared repo
 # easydev-org/easystream-webui and is fetched at BUILD time (build-webui.sh)
-# into rust/webui/, where the Rust `include_str!` embeds it into the binary.
-rust/webui/
-rust/target/
+# into webui/, where `include_str!` embeds it into the binary.
+webui/
+target/

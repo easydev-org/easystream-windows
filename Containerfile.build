@@ -2,9 +2,9 @@
 # SendInput) with the SHARED web UI embedded.
 #
 # The UI is not vendored: it is fetched from easydev-org/easystream-webui at
-# build time into rust/webui/, where `include_str!` inlines it.
-ARG REGISTRY=artifact.worker.svc.cluster.local
-FROM ${REGISTRY}/toolchain/rust:latest
+# build time into webui/, where `include_str!` inlines it.
+ARG REGISTRY=docker.io/library
+FROM ${REGISTRY}/rust:1-bookworm
 
 ARG WEBUI_REF=main
 ARG HTTPS_PROXY
@@ -14,14 +14,24 @@ ENV HTTPS_PROXY=${HTTPS_PROXY} HTTP_PROXY=${HTTP_PROXY} \
     PATH=/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # mingw-w64 is the only host tool needed to cross-compile the PE.
-RUN apt-get update && apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64 \
+# Debian packages come from the in-cluster artifact mirror (the build node has
+# no route to deb.debian.org). rust:1-bookworm is Debian 12 (bookworm).
+ARG ARTIFACT=http://artifact.worker.svc.cluster.local
+RUN rm -f /etc/apt/sources.list.d/* /etc/apt/sources.list \
+    && printf 'deb [trusted=yes] %s/artifacts/debian/debian bookworm main\n' "${ARTIFACT}" > /etc/apt/sources.list.d/artifact.list \
+    && echo 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/80-retries \
+    && apt-get update && apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
-COPY rust/ /src/
-COPY build-webui.sh /src/build-webui.sh
-RUN bash /src/build-webui.sh && ls -la /src/rust/webui
+COPY . /src/
 
-RUN rustup target add x86_64-pc-windows-gnu \
-    && cargo build --release --target x86_64-pc-windows-gnu
+RUN bash /src/build-webui.sh && ls -la /src/webui
+
+# rustup fetches its components from static.rust-lang.org, which the build proxy
+# cannot reach (it only fronts github). Run rustup WITHOUT the proxy; the webui
+# fetch above is the only step that needs it.
+RUN env -u HTTPS_PROXY -u HTTP_PROXY -u https_proxy -u http_proxy \
+      rustup target add x86_64-pc-windows-gnu
+RUN cargo build --release --manifest-path /src/Cargo.toml --target x86_64-pc-windows-gnu
 RUN cp /src/target/x86_64-pc-windows-gnu/release/easystream.exe /easystream.exe

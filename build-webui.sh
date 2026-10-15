@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fetch the shared web UI into rust/webui/ so `include_str!` can embed it.
+# Fetch the shared web UI into webui/ so `include_str!` can embed it.
 #
 # The UI lives in exactly ONE place (easydev-org/easystream-webui); every daemon
 # embeds it at build time instead of vendoring a copy.
@@ -8,7 +8,7 @@ cd "$(dirname "$0")"
 
 REF="${WEBUI_REF:-main}"
 PROXY="${HTTPS_PROXY:-${HTTP_PROXY:-}}"
-DEST="rust/webui"
+DEST="webui"
 URL="https://codeload.github.com/easydev-org/easystream-webui/tar.gz/refs/heads/${REF}"
 
 rm -rf "${DEST}"; mkdir -p "${DEST}"
