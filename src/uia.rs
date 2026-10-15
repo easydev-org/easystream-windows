@@ -139,21 +139,20 @@ fn render_tree(nodes: &[Node], root: usize, lines: &mut Vec<String>, prefix: &st
         label.push_str(&format!(" = \"{}\"", n.value));
     }
     lines.push(format!("{prefix}{label}"));
+    // Mirror the macOS/Linux backends exactly: a child's prefix is the
+    // parent's connector column replaced by its continuation (`│   ` for a
+    // non-last child, spaces for the last) plus the child's own connector.
+    let child_base = if let Some(b) = prefix.strip_suffix("├── ") {
+        format!("{b}│   ")
+    } else if let Some(b) = prefix.strip_suffix("└── ") {
+        format!("{b}    ")
+    } else {
+        prefix.to_string()
+    };
     for (i, &k) in n.kids.iter().enumerate() {
         let last = i + 1 == n.kids.len();
         let branch = if last { "└── " } else { "├── " };
-        let child_prefix = if prefix.is_empty() {
-            branch.to_string()
-        } else {
-            let base = if prefix.ends_with("├── ") || prefix.ends_with("└── ") {
-                &prefix[..prefix.len() - 4]
-            } else {
-                prefix
-            };
-            let cont = if last { "    " } else { "│   " };
-            format!("{base}{cont}{branch}")
-        };
-        render_tree(nodes, k, lines, &child_prefix);
+        render_tree(nodes, k, lines, &format!("{child_base}{branch}"));
     }
 }
 
