@@ -10,6 +10,9 @@ mod a11y;
 mod atspi;
 mod est;
 mod http;
+mod png;
+#[cfg(windows)]
+mod uia;
 
 // Linux backends (X11 / Wayland) use C shims + libx264.
 #[cfg(not(windows))]

@@ -261,7 +261,7 @@ unsafe impl windows::core::Interface for HMONITOR {
 
 /// Uia drives UI Automation: list apps, walk the tree, find/act on elements.
 pub struct Uia {
-    auto: IUIAutomation,
+    pub(crate) auto: IUIAutomation,
 }
 
 unsafe impl Send for Uia {}

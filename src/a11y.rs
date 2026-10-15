@@ -42,35 +42,27 @@ impl Backend {
     }
 
     pub fn tree(&self, pid: u32, depth: u32) -> Result<String, String> {
-        // `pid`/`depth` are used by the AT-SPI backend; the Windows backend is
-        // not wired yet, hence the allow.
-        #[cfg(windows)]
-        let _ = (pid, depth);
         match self {
             #[cfg(windows)]
-            Backend::Windows(_) => Err("tree: not yet wired on Windows".into()),
+            Backend::Windows(u) => u.tree(pid, depth),
             #[cfg(not(windows))]
             Backend::Atspi(a) => a.tree(pid, depth),
         }
     }
 
     pub fn find(&self, pid: u32, sel: &str, out: u8) -> Result<String, String> {
-        #[cfg(windows)]
-        let _ = (pid, sel, out);
         match self {
             #[cfg(windows)]
-            Backend::Windows(_) => Err("find: not yet wired on Windows".into()),
+            Backend::Windows(u) => u.find(pid, sel, out),
             #[cfg(not(windows))]
             Backend::Atspi(a) => a.find(pid, sel, out),
         }
     }
 
     pub fn action(&self, pid: u32, sel: &str, action: &str, value: Option<&str>) -> Result<String, String> {
-        #[cfg(windows)]
-        let _ = (pid, sel, action, value);
         match self {
             #[cfg(windows)]
-            Backend::Windows(_) => Err("action: not yet wired on Windows".into()),
+            Backend::Windows(u) => u.action(pid, sel, action, value),
             #[cfg(not(windows))]
             Backend::Atspi(a) => a.action(pid, sel, action, value),
         }
