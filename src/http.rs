@@ -165,11 +165,26 @@ fn q(query: &str, key: &str) -> String {
 }
 
 fn a11y_route(reader: &mut BufReader<TcpStream>, path: &str, query: &str, a11y: A11y) -> Result<(), String> {
+    // The backend is built on THIS thread, every request.
+    //
+    // An IUIAutomation created on one thread and used from another crashes the
+    // daemon with a native access violation (not a Rust panic) even under MTA,
+    // so the shared-cache the Linux backend uses is unsafe on Windows.
+    // CoCreateInstance is cheap next to a tree walk. On Linux the D-Bus
+    // connection IS shareable, so it is cached as before.
+    #[cfg(windows)]
+    let owned = crate::a11y::Backend::open()?;
+    #[cfg(windows)]
+    let be = &owned;
+    #[cfg(not(windows))]
     let mut guard = a11y.lock().unwrap();
-    if guard.is_none() {
-        *guard = Some(crate::a11y::Backend::open()?);
-    }
-    let be = guard.as_ref().unwrap();
+    #[cfg(not(windows))]
+    let be = {
+        if guard.is_none() {
+            *guard = Some(crate::a11y::Backend::open()?);
+        }
+        guard.as_ref().unwrap()
+    };
     let pid: u32 = q(query, "pid").parse().unwrap_or(0);
     // Screenshot returns PNG bytes, not text.
     if path == "/a11y/screenshot" {
