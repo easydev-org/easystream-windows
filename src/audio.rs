@@ -119,6 +119,14 @@ impl Capture {
     /// interpolation if it is not 48 kHz (rare in practice).
     pub fn read_frame(&mut self) -> Option<Vec<i16>> {
         let want = FRAME_SAMPLES * 2; // bytes
+        // WASAPI loopback delivers NOTHING while the render endpoint is silent
+        // (no application is playing), so a plain "wait until the frame is
+        // full" loop blocks forever and starves the whole audio pump — every
+        // viewer then sees the 0x05 stream stall until something happens to
+        // play, and a viewer that connects while the guest is quiet gets no
+        // audio at all. Bound the wait: if no data arrives within the deadline,
+        // emit one frame of silence so the feed keeps flowing.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(100);
         while self.buf.len() < want {
             let mut chunk = Vec::new();
             unsafe {
@@ -127,7 +135,10 @@ impl Capture {
                 let mut flags: u32 = 0;
                 let hr = self.capture.GetBuffer(&mut data, &mut frames, &mut flags, None, None);
                 if hr.is_err() || data.is_null() || frames == 0 {
-                    // Nothing available yet: sleep a little and retry.
+                    if std::time::Instant::now() >= deadline {
+                        self.buf.resize(want, 0);
+                        break;
+                    }
                     std::thread::sleep(std::time::Duration::from_millis(5));
                     continue;
                 }
