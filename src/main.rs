@@ -6,6 +6,9 @@
 //! cross-backend conflict. Rewritten in Rust so the ownership rules catch the
 //! lifetime bugs that crashed the Zig version.
 mod a11y;
+mod auth;
+mod audio;
+mod opus;
 #[cfg(not(windows))]
 mod atspi;
 mod est;

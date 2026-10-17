@@ -195,6 +195,11 @@ const T_BUTTON: u8 = 0x11;
 const T_SCROLL: u8 = 0x12;
 const T_KEY: u8 = 0x13;
 const T_TEXT: u8 = 0x14;
+const T_AUTH: u8 = 0x03;
+const T_AUTH_OK: u8 = 0x04;
+const T_AUDIO: u8 = 0x05;
+const T_AUDIO_REQ: u8 = 0x06;
+const T_AUDIO_OFF: u8 = 0x07;
 const T_CLIP_GET: u8 = 0x30;
 const T_CLIP_DATA: u8 = 0x31;
 const T_CLIP_SET: u8 = 0x32;
@@ -206,6 +211,11 @@ const T_PONG: u8 = 0x51;
 /// a Mutex (capture and input both touch it).
 pub struct Conn {
     stream: Mutex<TcpStream>,
+    /// Access mode for THIS connection (View = read-only). Set by the Auth
+    /// frame (0x03) or inherited from the HTTP pipe's token.
+    mode: std::sync::atomic::AtomicU8,
+    /// Whether this connection wants Audio frames (turned on by AudioReq 0x06).
+    audio_on: std::sync::atomic::AtomicBool,
     /// The process-wide input backend (shared by every connection).
     input: &'static Option<Mutex<Input>>,
     /// In-process clipboard fallback (Linux/Wayland have no system clipboard
@@ -265,6 +275,8 @@ pub fn serve(port: u16) -> Result<(), String> {
 /// its own pump (N tabs = N x CPU).
 struct Broadcaster {
     subs: Mutex<Vec<mpsc::SyncSender<Arc<Vec<u8>>>>>,
+    /// Audio (Opus) subscribers, separate from video.
+    asubs: Mutex<Vec<mpsc::SyncSender<Arc<Vec<u8>>>>>,
     /// bumped whenever a new viewer subscribes, so the pump sends a keyframe.
     new_sub: std::sync::atomic::AtomicBool,
 }
@@ -294,6 +306,19 @@ impl Broadcaster {
     fn has_subs(&self) -> bool {
         self.subs.lock().map(|s| !s.is_empty()).unwrap_or(false)
     }
+    fn subscribe_audio(&self) -> mpsc::Receiver<Arc<Vec<u8>>> {
+        let (tx, rx) = mpsc::sync_channel(8);
+        if let Ok(mut s) = self.asubs.lock() { s.push(tx); }
+        rx
+    }
+    fn broadcast_audio(&self, pkt: Arc<Vec<u8>>) {
+        if let Ok(mut s) = self.asubs.lock() {
+            s.retain(|tx| !matches!(tx.try_send(pkt.clone()), Err(mpsc::TrySendError::Disconnected(_))));
+        }
+    }
+    fn has_audio_subs(&self) -> bool {
+        self.asubs.lock().map(|s| !s.is_empty()).unwrap_or(false)
+    }
 }
 
 static BC: OnceLock<Arc<Broadcaster>> = OnceLock::new();
@@ -302,13 +327,48 @@ fn broadcaster() -> Arc<Broadcaster> {
     BC.get_or_init(|| {
         let b = Arc::new(Broadcaster {
             subs: Mutex::new(Vec::new()),
+            asubs: Mutex::new(Vec::new()),
             new_sub: std::sync::atomic::AtomicBool::new(false),
         });
         let bb = Arc::clone(&b);
         thread::spawn(move || pump(bb));
+        let ba = Arc::clone(&b);
+        thread::spawn(move || audio_pump(ba));
         b
     })
     .clone()
+}
+
+/// audio_pump is the single audio capture+encode loop (20 ms Opus frames),
+/// shared by every audio subscriber.
+fn audio_pump(bc: Arc<Broadcaster>) {
+    let mut cap: Option<crate::audio::Capture> = None;
+    let mut enc: Option<crate::opus::Opus> = None;
+    loop {
+        if !bc.has_audio_subs() {
+            thread::sleep(Duration::from_millis(200));
+            continue;
+        }
+        if cap.is_none() {
+            match crate::audio::Capture::open() {
+                Ok(c) => cap = Some(c),
+                Err(e) => { eprintln!("audio pump: {e}"); thread::sleep(Duration::from_millis(1000)); continue; }
+            }
+        }
+        if enc.is_none() {
+            match crate::opus::Opus::new(crate::audio::RATE, crate::audio::CHANNELS, 96_000) {
+                Ok(e) => enc = Some(e),
+                Err(e) => { eprintln!("audio pump: opus {e}"); thread::sleep(Duration::from_millis(1000)); continue; }
+            }
+        }
+        match cap.as_mut().unwrap().read_frame() {
+            Some(pcm) => {
+                let pkt = enc.as_mut().unwrap().encode(&pcm);
+                if !pkt.is_empty() { bc.broadcast_audio(Arc::new(pkt)); }
+            }
+            None => { cap = None; thread::sleep(Duration::from_millis(500)); }
+        }
+    }
 }
 
 /// pump is the single capture+encode loop, shared by all connections. It idles
@@ -540,6 +600,14 @@ fn handle(stream: TcpStream) -> Result<(), String> {
     let (w, h) = shared_size();
     let conn = Arc::new(Conn {
         stream: Mutex::new(stream.try_clone().map_err(|e| e.to_string())?),
+        // When auth is ON, an unauthenticated connection is READ-ONLY until it
+        // sends a valid Auth frame — never Control by default.
+        mode: std::sync::atomic::AtomicU8::new(if crate::auth::is_open() {
+            crate::auth::Mode::Control as u8
+        } else {
+            crate::auth::Mode::View as u8
+        }),
+        audio_on: std::sync::atomic::AtomicBool::new(false),
         input,
         // (input is Option<Mutex<X11>>)
         #[cfg(not(windows))]
@@ -547,17 +615,26 @@ fn handle(stream: TcpStream) -> Result<(), String> {
     });
 
     // Hello (EST.md): version, codec, w, h, fps.
-    let mut hello = [0u8; 7];
+    let mut hello = vec![0u8; 7 + 8];
     hello[0] = 1;
     hello[1] = 1;
     hello[2..4].copy_from_slice(&(w as u16).to_be_bytes());
     hello[4..6].copy_from_slice(&(h as u16).to_be_bytes());
     hello[6] = 30;
+    // Audio block @7: u8 present, u8 codec(1=Opus), u32 rate, u8 ch, u8 ms.
+    // Set when the audio pump actually has a capture source (see audio.rs).
+    let (has_audio, a_rate, a_ch, a_ms) = crate::audio::params();
+    hello[7] = if has_audio { 1 } else { 0 };
+    hello[8] = 1; // Opus
+    hello[9..13].copy_from_slice(&a_rate.to_be_bytes());
+    hello[13] = a_ch;
+    hello[14] = a_ms;
     conn.write_frame(T_HELLO, &hello).map_err(|e| e.to_string())?;
 
     // Subscribe to the SHARED pump: this connection only forwards the access
     // units, so many viewers share one capture+encode pipeline.
     let rx = broadcaster().subscribe();
+    let arx = if hello[7] == 1 { Some(broadcaster().subscribe_audio()) } else { None };
     let vc = Arc::clone(&conn);
     let video = thread::spawn(move || {
         while let Ok(au) = rx.recv() {
@@ -567,10 +644,25 @@ fn handle(stream: TcpStream) -> Result<(), String> {
         }
     });
 
+    // Audio forwarder (Opus packets -> T_AUDIO frames), gated by audio_on.
+    let audio_thread = arx.map(|arx| {
+        let ac = Arc::clone(&conn);
+        thread::spawn(move || {
+            while let Ok(pkt) = arx.recv() {
+                if ac.audio_on.load(std::sync::atomic::Ordering::Relaxed)
+                    && ac.write_frame(T_AUDIO, &pkt).is_err()
+                {
+                    return;
+                }
+            }
+        })
+    });
+
     // Control reader on this thread.
     control_loop(&conn, stream)?;
     // The client is gone; the pump will exit on its next failed write.
     let _ = video.join();
+    if let Some(t) = audio_thread { let _ = t.join(); }
     Ok(())
 }
 
@@ -597,6 +689,28 @@ fn u16at(b: &[u8], o: usize) -> i16 {
 }
 
 fn dispatch(conn: &Arc<Conn>, typ: u8, b: &[u8]) -> Result<(), String> {
+    if typ == T_AUTH {
+        let tok = std::str::from_utf8(b).unwrap_or("");
+        let mode = crate::auth::authorize(Some(tok));
+        conn.mode.store(mode as u8, std::sync::atomic::Ordering::SeqCst);
+        let _ = conn.write_frame(T_AUTH_OK, &[mode as u8]);
+        eprintln!("est: auth -> {:?}", mode);
+        return Ok(());
+    }
+    if typ == T_AUDIO_REQ {
+        conn.audio_on.store(true, std::sync::atomic::Ordering::SeqCst);
+        return Ok(());
+    }
+    if typ == T_AUDIO_OFF {
+        conn.audio_on.store(false, std::sync::atomic::Ordering::SeqCst);
+        return Ok(());
+    }
+    // View mode: drop every frame that would CHANGE the guest.
+    if conn.mode.load(std::sync::atomic::Ordering::SeqCst) == crate::auth::Mode::View as u8
+        && crate::auth::is_mutation(typ)
+    {
+        return Ok(());
+    }
     match typ {
         T_MOVE => {
             conn.with_input(|x| x.move_to(u16at(b, 0), u16at(b, 2)));

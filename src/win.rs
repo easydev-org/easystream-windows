@@ -466,6 +466,14 @@ pub fn key_by_name(name: &str) -> Option<u16> {
         "control" | "ctrl" => 0x11,
         "alt" => 0x12,
         "meta" | "super" | "win" => 0x5B,
+        // VK_CAPITAL(0x14) toggles caps; the lock keys are VK_NUMLOCK(0x90) /
+        // VK_SCROLL(0x91). PrintScreen/Pause/Menu complete the set.
+        "capslock" | "caps" => 0x14,
+        "numlock" => 0x90,
+        "scrolllock" => 0x91,
+        "printscreen" | "print" => 0x2C,
+        "pause" => 0x13,
+        "menu" | "contextmenu" => 0x5D,
         s if s.chars().count() == 1 => {
             let c = s.chars().next().unwrap();
             return char_keycode(c).map(|(k, _)| k);
