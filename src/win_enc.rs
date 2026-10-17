@@ -245,6 +245,16 @@ impl MfEncoder {
                 };
                 let mut status = 0u32;
                 let r = self.transform.ProcessOutput(0, std::slice::from_mut(&mut data), &mut status);
+                // ALWAYS take the output objects out of the ManuallyDrop fields,
+                // even when ProcessOutput failed. ManuallyDrop suppresses the
+                // drop glue, so an early `return` that skipped this leaked one
+                // IMFSample (an ~8 MB buffer at 1920x1080 BGRA) per call — at
+                // 30 fps the MFT ran out of memory within seconds and the
+                // daemon aborted with "Not enough memory resources". pEvents
+                // leaks the same way, so take both before branching on the
+                // result.
+                let sample = std::mem::ManuallyDrop::take(&mut data.pSample);
+                let _events = std::mem::ManuallyDrop::take(&mut data.pEvents);
                 if let Err(e) = r {
                     if e.code() == MF_E_TRANSFORM_NEED_MORE_INPUT {
                         return Ok(());
@@ -257,7 +267,6 @@ impl MfEncoder {
                     }
                     return Ok(());
                 }
-                let sample = std::mem::ManuallyDrop::take(&mut data.pSample);
                 if let Some(sample) = sample {
                     if let Ok(buf) = sample.ConvertToContiguousBuffer() {
                         let mut ptr: *mut u8 = std::ptr::null_mut();
