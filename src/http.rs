@@ -97,6 +97,12 @@ fn handle(stream: TcpStream, est_port: u16, a11y: A11y) -> Result<(), String> {
         "/" | "/index.html" => respond_text(&mut reader, 200, "text/html; charset=utf-8", INDEX_HTML),
         "/app.js" => respond_text(&mut reader, 200, "application/javascript; charset=utf-8", APP_JS),
         "/health" => respond_text(&mut reader, 200, "text/plain", "ok"),
+        "/capabilities" => respond_text(
+            &mut reader,
+            200,
+            "application/json",
+            &crate::probe::capabilities().to_json(),
+        ),
         "/est/ws" => ws_pipe(reader, headers, est_port, mode, query.contains("audio=1")),
         p if p.starts_with("/a11y/") => a11y_route(&mut reader, p, &query, a11y),
         _ => respond_text(&mut reader, 404, "text/plain", "not found"),

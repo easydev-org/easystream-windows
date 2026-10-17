@@ -33,11 +33,24 @@ pub fn params() -> (bool, u32, u8, u8) {
     (probe(), RATE, CHANNELS as u8, FRAME_MS)
 }
 
+/// PROBED caches the one-shot loopback probe result. It is readable without
+/// triggering the probe, so /capabilities can say "Probing" vs "None".
+static PROBED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+/// probe_done_pub reports whether the loopback probe has finished yet.
+pub fn probe_done_pub() -> bool {
+    PROBED.get().is_some()
+}
+
+/// ensure_probed runs the probe if it has not run yet (called at startup so
+/// /capabilities resolves quickly).
+pub fn ensure_probed() {
+    let _ = probe();
+}
+
 /// probe opens the loopback once and caches whether it worked.
 fn probe() -> bool {
-    use std::sync::OnceLock;
-    static OK: OnceLock<bool> = OnceLock::new();
-    *OK.get_or_init(|| match Capture::open() {
+    *PROBED.get_or_init(|| match Capture::open() {
         Ok(_) => {
             eprintln!("audio: WASAPI loopback available");
             true
@@ -121,11 +134,11 @@ impl Capture {
         let want = FRAME_SAMPLES * 2; // bytes
         // WASAPI loopback delivers NOTHING while the render endpoint is silent
         // (no application is playing), so a plain "wait until the frame is
-        // full" loop blocks forever and starves the whole audio pump — every
-        // viewer then sees the 0x05 stream stall until something happens to
-        // play, and a viewer that connects while the guest is quiet gets no
-        // audio at all. Bound the wait: if no data arrives within the deadline,
-        // emit one frame of silence so the feed keeps flowing.
+        // full" loop blocks forever and starves the whole audio pump — the
+        // stream then stalls for every viewer until something happens to play.
+        // Bound the wait: if no data arrives within the deadline, emit one frame
+        // of silence so the feed keeps flowing (a viewer hears silence, not a
+        // frozen stream).
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(100);
         while self.buf.len() < want {
             let mut chunk = Vec::new();

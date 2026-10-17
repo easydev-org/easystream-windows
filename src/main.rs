@@ -14,6 +14,7 @@ mod atspi;
 mod est;
 mod http;
 mod png;
+mod probe;
 #[cfg(windows)]
 mod uia;
 
@@ -76,6 +77,9 @@ fn main() {
         return;
     }
     if args.len() >= 2 && args[1] == "serve" || args.len() < 2 {
+        // Kick off the audio probe so /capabilities can report the real path
+        // (it reports "Probing" until this finishes).
+        audio::ensure_probed();
         // The HTTP surface (webui + /est/ws pipe + /a11y) runs alongside the est
         // listener in the SAME process, so the daemon is the only thing a viewer
         // or the worker connects to.
