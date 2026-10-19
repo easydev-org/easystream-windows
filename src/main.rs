@@ -1,4 +1,4 @@
-//! easystream (Rust) — the Linux/Windows screen daemon (see EST.md + A11Y_HTTP.md).
+//! easystream (Rust) — the Windows screen daemon (see EST.md + A11Y_HTTP.md).
 //!
 //! ONE TCP connection multiplexes the H.264 video stream (0x02), input
 //! (0x10-0x14), clipboard (0x30-0x32) and a11y queries (0x20-0x27). Capture,
@@ -9,27 +9,15 @@ mod a11y;
 mod auth;
 mod audio;
 mod opus;
-#[cfg(not(windows))]
-mod atspi;
 mod est;
 mod http;
 mod png;
 mod probe;
-#[cfg(windows)]
 mod uia;
 
-// Linux backends (X11 / Wayland) use C shims + libx264.
-#[cfg(not(windows))]
-mod wayland;
-#[cfg(not(windows))]
-mod x11;
-#[cfg(not(windows))]
-mod x264;
 
 // Windows backend (UIA / WGC / MF / SendInput) uses the `windows` crate.
-#[cfg(windows)]
 mod win;
-#[cfg(windows)]
 mod win_enc;
 
 use std::env;
@@ -49,7 +37,6 @@ fn main() {
         .unwrap_or(48078);
     let args: Vec<String> = env::args().collect();
     // Diagnostic one-shots (mirror the C# daemon's `wgctest`).
-    #[cfg(windows)]
     if args.len() >= 2 && args[1] == "wgctest" {
         match win::Wgc::open() {
             Ok(w) => { let (a, b) = w.size(); println!("WGC ok {a}x{b}"); }
@@ -57,7 +44,6 @@ fn main() {
         }
         return;
     }
-    #[cfg(windows)]
     if args.len() >= 2 && args[1] == "enc-test" {
         match win_enc::MfEncoder::new(1920, 1080, 30, 12_000_000) {
             Ok(_) => println!("MF encoder ok"),
@@ -65,7 +51,6 @@ fn main() {
         }
         return;
     }
-    #[cfg(windows)]
     if args.len() >= 2 && args[1] == "uia-test" {
         match win::Uia::new() {
             Ok(u) => match u.apps() {

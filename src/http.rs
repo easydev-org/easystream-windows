@@ -39,7 +39,6 @@ pub fn serve(port: u16, est_port: u16, a11y: A11y) -> Result<(), String> {
                     // invoke any of the subscribers"). MTA matches the main
                     // thread, so the already-created IUIAutomation can be used
                     // from here.
-                    #[cfg(windows)]
                     unsafe {
                         let _ = windows::Win32::System::Com::CoInitializeEx(
                             None,
@@ -183,22 +182,11 @@ fn a11y_route(reader: &mut BufReader<TcpStream>, path: &str, query: &str, a11y: 
     //
     // An IUIAutomation created on one thread and used from another crashes the
     // daemon with a native access violation (not a Rust panic) even under MTA,
-    // so the shared-cache the Linux backend uses is unsafe on Windows.
-    // CoCreateInstance is cheap next to a tree walk. On Linux the D-Bus
+    // so the shared cache used elsewhere is unsafe here.
+    // CoCreateInstance is cheap next to a tree walk. (A D-Bus-based backend
     // connection IS shareable, so it is cached as before.
-    #[cfg(windows)]
     let owned = crate::a11y::Backend::open()?;
-    #[cfg(windows)]
     let be = &owned;
-    #[cfg(not(windows))]
-    let mut guard = a11y.lock().unwrap();
-    #[cfg(not(windows))]
-    let be = {
-        if guard.is_none() {
-            *guard = Some(crate::a11y::Backend::open()?);
-        }
-        guard.as_ref().unwrap()
-    };
     let pid: u32 = q(query, "pid").parse().unwrap_or(0);
     // Screenshot returns PNG bytes, not text.
     if path == "/a11y/screenshot" {
@@ -301,14 +289,8 @@ fn input_key(query: &str) -> Result<String, String> {
     })
 }
 
-// The Linux and Windows key maps have the same shape but different keycodes.
-#[cfg(not(windows))]
-fn char_keycode(ch: char) -> Option<(u8, bool)> { crate::x11::char_keycode(ch) }
-#[cfg(windows)]
+// The Windows key map (virtual-key codes).
 fn char_keycode(ch: char) -> Option<(u16, bool)> { crate::win::char_keycode(ch) }
-#[cfg(not(windows))]
-fn key_by_name(name: &str) -> Option<u8> { crate::x11::key_by_name(name) }
-#[cfg(windows)]
 fn key_by_name(name: &str) -> Option<u16> { crate::win::key_by_name(name) }
 
 fn input_scroll(query: &str) -> Result<String, String> {

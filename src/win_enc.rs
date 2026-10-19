@@ -1,5 +1,5 @@
 //! Media Foundation H.264 encoder (Windows hardware encoder, the counterpart of
-//! macOS VideoToolbox / Linux libx264). It accepts BGRA frames and emits Annex-B
+//! macOS VideoToolbox). It accepts BGRA frames and emits Annex-B
 //! access units, so the est pump treats it exactly like the other platforms.
 //!
 //! Uses the raw Media Foundation COM interfaces via the `windows` crate — no

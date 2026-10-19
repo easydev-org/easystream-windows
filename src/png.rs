@@ -84,7 +84,7 @@ pub fn encode_bgra(w: u32, h: u32, bgra: &[u8]) -> Vec<u8> {
     let mut rgba = bgra.to_vec();
     for px in rgba.chunks_exact_mut(4) {
         px.swap(0, 2); // B<->R
-        px[3] = 255;   // force opaque: the X11 shm buffer's alpha is undefined
+        px[3] = 255;   // force opaque: the captured alpha is undefined
     }
     encode_rgba(w, h, &rgba)
 }

@@ -11,52 +11,22 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
 
-#[cfg(not(windows))]
-use crate::x11::{char_keycode, key_by_name, X11};
-#[cfg(not(windows))]
-use crate::wayland::{Wayland, WlInput};
-#[cfg(not(windows))]
-use crate::x264::X264;
-#[cfg(windows)]
 use crate::win::{char_keycode as win_char_keycode, clipboard as win_clip, key_by_name as win_key_by_name, Wgc, WinInput};
-#[cfg(windows)]
 use crate::win_enc::MfEncoder;
-/// Capture is either the X11 (XGetImage) or Wayland (wlr-screencopy) backend.
+/// Capture is the Windows.Graphics.Capture (WGC) backend.
 pub enum Capture {
-    #[cfg(not(windows))]
-    X11(X11),
-    #[cfg(not(windows))]
-    Wl(Wayland),
-    #[cfg(windows)]
     Win(Wgc),
 }
 
 impl Capture {
     pub fn open() -> Result<Capture, String> {
-        #[cfg(windows)]
         { return Ok(Capture::Win(Wgc::open()?)); }
-        #[cfg(not(windows))]
-        {
-            if std::env::var("WAYLAND_DISPLAY").map(|v| !v.is_empty()).unwrap_or(false) {
-                return Ok(Capture::Wl(Wayland::open()?));
-            }
-            Ok(Capture::X11(X11::open()?))
-        }
     }
-    /// grab returns the newest frame as top-down BGRA pixels (the X11/Wayland
-    /// API; Windows uses grab_into so it can reuse a caller-owned buffer).
-    #[cfg(not(windows))]
-    pub fn grab(&self) -> Result<Vec<u8>, String> {
-        match self {
-            Capture::X11(x) => x.grab(),
-            Capture::Wl(w) => w.grab(),
-        }
-    }
+    /// grab returns the newest frame as top-down BGRA pixels.
     /// grab_ptr returns a pointer into the capture buffer (zero-copy), valid
     /// until the next grab. None when the backend cannot expose one.
     /// grab_into copies the newest frame into `out` (reused) and reports its
     /// size. Only Windows implements it (WGC); other backends use grab_ptr.
-    #[cfg(windows)]
     pub fn grab_into(&self, out: &mut Vec<u8>) -> Result<Option<(u32, u32)>, String> {
         match self {
             Capture::Win(w) => w.grab_into(out),
@@ -64,122 +34,67 @@ impl Capture {
     }
     pub fn grab_ptr(&self) -> Option<(*const u8, u32, u32)> {
         match self {
-            #[cfg(not(windows))]
-            Capture::X11(x) => x.grab_shm_ptr(),
-            #[cfg(not(windows))]
-            Capture::Wl(w) => w.grab_shm_ptr(),
-            #[cfg(windows)]
             Capture::Win(_) => None,
         }
     }
     pub fn size(&self) -> (u32, u32) {
         match self {
-            #[cfg(not(windows))]
-            Capture::X11(x) => x.size(),
-            #[cfg(not(windows))]
-            Capture::Wl(_) => (1920, 1080),
-            #[cfg(windows)]
             Capture::Win(w) => w.size(),
         }
     }
 }
 
-/// Input is the platform input backend (X11 XTest or Wayland wlr-virtual-*).
+/// Input is the Windows input backend (SendInput).
 pub enum Input {
-    #[cfg(not(windows))]
-    X11(X11),
-    #[cfg(not(windows))]
-    Wl(WlInput),
-    #[cfg(windows)]
     Win(WinInput),
 }
 
 impl Input {
     pub fn move_to(&self, x: i16, y: i16) {
         match self {
-            #[cfg(not(windows))]
-            Input::X11(i) => i.move_to(x, y),
-            #[cfg(not(windows))]
-            Input::Wl(i) => i.move_to(x, y),
-            #[cfg(windows)]
             Input::Win(i) => i.move_to(x, y),
         }
     }
     pub fn button(&self, num: u8, down: bool) {
         match self {
-            #[cfg(not(windows))]
-            Input::X11(i) => i.button(num, down),
-            #[cfg(not(windows))]
-            Input::Wl(i) => i.button(num, down),
-            #[cfg(windows)]
             Input::Win(i) => i.button(num, down),
         }
     }
     pub fn scroll(&self, dx: i32, dy: i32) {
         match self {
-            #[cfg(not(windows))]
-            Input::X11(i) => {
-                let (vbtn, vn) = if dy > 0 { (5u8, dy) } else { (4u8, -dy) };
-                for _ in 0..vn { i.button(vbtn, true); i.button(vbtn, false); }
-                let (hbtn, hn) = if dx > 0 { (7u8, dx) } else { (6u8, -dx) };
-                for _ in 0..hn { i.button(hbtn, true); i.button(hbtn, false); }
-            }
-            #[cfg(not(windows))]
-            Input::Wl(i) => i.scroll(dx, dy),
-            #[cfg(windows)]
             Input::Win(i) => i.scroll(dx, dy),
         }
     }
     pub fn key(&self, keycode: u16, down: bool) {
         match self {
-            #[cfg(not(windows))]
-            Input::X11(i) => i.key(keycode as u8, down),
-            #[cfg(not(windows))]
-            Input::Wl(i) => i.key(keycode as u8, down),
-            #[cfg(windows)]
             Input::Win(i) => i.key(keycode, down),
         }
     }
 
 }
 
-/// Encoder is the platform H.264 encoder (libx264 on Linux, Media Foundation on
-/// Windows). Both take BGRA and return an Annex-B access unit.
+/// Encoder is the H.264 encoder (Media Foundation). It takes BGRA and returns
+/// an Annex-B access unit.
 pub enum Encoder {
-    #[cfg(not(windows))]
-    X264(X264),
-    #[cfg(windows)]
     Mf(MfEncoder),
 }
 
 impl Encoder {
     fn new(w: u32, h: u32, fps: u32, bitrate: u32) -> Result<Encoder, String> {
-        #[cfg(windows)]
         { return Ok(Encoder::Mf(MfEncoder::new(w, h, fps, bitrate)?)); }
-        #[cfg(not(windows))]
-        { Ok(Encoder::X264(X264::new(w, h, fps, bitrate)?)) }
     }
     fn force_idr(&mut self) {
         match self {
-            #[cfg(not(windows))]
-            Encoder::X264(e) => e.force_idr(),
-            #[cfg(windows)]
             Encoder::Mf(e) => e.force_idr(),
         }
     }
     fn encode(&mut self, bgra: &[u8]) -> Result<Vec<Vec<u8>>, String> {
         match self {
-            #[cfg(not(windows))]
-            Encoder::X264(e) => e.encode(bgra).map(|au| if au.is_empty() { Vec::new() } else { vec![au] }),
-            #[cfg(windows)]
             Encoder::Mf(e) => e.encode(bgra),
         }
     }
     fn encode_ptr(&mut self, p: *const u8, len: u32) -> Result<Vec<Vec<u8>>, String> {
         match self {
-            #[cfg(not(windows))]
-            Encoder::X264(e) => e.encode_ptr(p, len).map(|au| if au.is_empty() { Vec::new() } else { vec![au] }),
-            #[cfg(windows)]
             Encoder::Mf(e) => {
                 let slice = unsafe { std::slice::from_raw_parts(p, len as usize) };
                 e.encode(slice)
@@ -207,8 +122,8 @@ const T_PING: u8 = 0x50;
 const T_PONG: u8 = 0x51;
 
 /// Conn is shared between the video thread and the control reader. The write
-/// half is behind a Mutex (both threads write frames); the X11 handle is behind
-/// a Mutex (capture and input both touch it).
+/// half is behind a Mutex (both threads write frames); the input handle is
+/// behind a Mutex (capture and input both touch it).
 pub struct Conn {
     stream: Mutex<TcpStream>,
     /// Access mode for THIS connection (View = read-only). Set by the Auth
@@ -218,10 +133,6 @@ pub struct Conn {
     audio_on: std::sync::atomic::AtomicBool,
     /// The process-wide input backend (shared by every connection).
     input: &'static Option<Mutex<Input>>,
-    /// In-process clipboard fallback (Linux/Wayland have no system clipboard
-    /// here); Windows uses the real Win32 clipboard instead.
-    #[cfg(not(windows))]
-    clipboard: Mutex<String>,
 }
 
 impl Conn {
@@ -235,7 +146,7 @@ impl Conn {
         s.flush()
     }
 
-    /// with_input runs `f` with the X11 input connection, if any (Wayland has no
+    /// with_input runs `f` with the input connection, if any (there is no
     /// input backend wired yet, so input frames are ignored there).
     fn with_input(&self, f: impl FnOnce(&Input)) {
         if let Some(i) = self.input.as_ref() {
@@ -390,20 +301,17 @@ fn pump(bc: Arc<Broadcaster>) {
     // first few so the stream always starts on a static screen.
     let mut warmup: u32 = 5;
     // Reused "last frame" buffer for the no-zero-copy path (Windows WGC always,
-    // and X11/Wayland when XSHM is unavailable).
-    // Windows reads the initial None (grab_into fills it); the X11/Wayland arm
+    // when a zero-copy pointer is unavailable).
+    // The reader fills the initial None (grab_into); the grab_ptr arm
     // assigns it before the only read, so it starts uninitialised there.
-    #[cfg(windows)]
     let mut last: Option<Vec<u8>> = None;
-    #[cfg(not(windows))]
-    let mut last: Option<Vec<u8>>;
     loop {
         if !bc.has_subs() {
             thread::sleep(Duration::from_millis(100));
             continue;
         }
         {
-            // Periodic memory trace: the wayland path was OOM-killing the pod,
+            // Periodic memory trace: a leak here OOM-killed the pod,
             // and we need to know whether the pump is the one growing.
             use std::sync::atomic::{AtomicU64, Ordering};
             static N: AtomicU64 = AtomicU64::new(0);
@@ -442,10 +350,10 @@ fn pump(bc: Arc<Broadcaster>) {
         if want_key {
             enc.as_mut().unwrap().force_idr();
         }
-        // Zero-copy: X11 exposes a pointer into the XSHM segment, so we can
+        // Zero-copy: when a pointer into the capture buffer is available, we can
         // compare and encode straight from it (no per-frame 8 MB Vec copy).
-        // Wayland (no pointer API here) still copies into a Vec.
-        // Grab (zero-copy pointer on X11; Vec otherwise) and decide.
+        // A copy into a Vec when no zero-copy pointer is available.
+        // Grab (zero-copy pointer when available; Vec otherwise) and decide.
         let ptr = cap.as_ref().unwrap().grab_ptr();
         let (changed, au) = match ptr {
             Some((p, w, h)) => {
@@ -470,7 +378,7 @@ fn pump(bc: Arc<Broadcaster>) {
                     // Reuse the previous frame's buffer instead of allocating a
                     // fresh ~8 MB Vec every frame: a large allocation per frame
                     // goes through mmap/munmap and ballooned RSS until the pod
-                    // was OOM-killed (wayland captures at full rate, so every
+                    // was OOM-killed (capture runs at full rate, so every
                     // frame changed). Copy into the existing buffer instead.
                     match prev.as_mut() {
                         Some(buf) if buf.len() == n => buf.copy_from_slice(cur),
@@ -489,7 +397,6 @@ fn pump(bc: Arc<Broadcaster>) {
                 // Windows: copy straight into the reused `last` buffer, so a
                 // frame never allocates a fresh ~8 MB Vec (that alloc failed
                 // outright under the guest's tight RAM and aborted the daemon).
-                #[cfg(windows)]
                 let got = {
                     if last.is_none() { last = Some(Vec::new()); }
                     match cap.as_ref().unwrap().grab_into(last.as_mut().unwrap()) {
@@ -500,15 +407,6 @@ fn pump(bc: Arc<Broadcaster>) {
                             thread::sleep(frame_dur);
                             continue;
                         }
-                    }
-                };
-                #[cfg(not(windows))]
-                let got = match cap.as_ref().unwrap().grab() {
-                    Ok(px) => { last = Some(px); true }
-                    Err(e) => {
-                        eprintln!("est pump: grab {e}");
-                        thread::sleep(frame_dur);
-                        continue;
                     }
                 };
                 if got {
@@ -560,20 +458,7 @@ fn pump(bc: Arc<Broadcaster>) {
 pub fn shared_input() -> &'static Option<Mutex<Input>> {
     static IN: OnceLock<Option<Mutex<Input>>> = OnceLock::new();
     IN.get_or_init(|| {
-        #[cfg(windows)]
         { WinInput::open().ok().map(|i| Mutex::new(Input::Win(i))) }
-        #[cfg(not(windows))]
-        {
-            let wayland = std::env::var("WAYLAND_DISPLAY").map(|v| !v.is_empty()).unwrap_or(false);
-            if wayland {
-                match WlInput::open() {
-                    Ok(i) => Some(Mutex::new(Input::Wl(i))),
-                    Err(e) => { eprintln!("wayland input: {e}"); None }
-                }
-            } else {
-                X11::open().ok().map(|i| Mutex::new(Input::X11(i)))
-            }
-        }
     })
 }
 
@@ -582,16 +467,13 @@ pub fn shared_input() -> &'static Option<Mutex<Input>> {
 fn shared_size() -> (u32, u32) {
     static SZ: OnceLock<(u32, u32)> = OnceLock::new();
     *SZ.get_or_init(|| {
-        #[cfg(windows)]
         { Wgc::open().map(|c| c.size()).unwrap_or((1920, 1080)) }
-        #[cfg(not(windows))]
-        { (1920u32, 1080u32) }
     })
 }
 
 fn handle(stream: TcpStream) -> Result<(), String> {
     // ONE shared input backend for the whole process. Creating a fresh one per
-    // connection was heavy (Wayland: a new wl_display + virtual keyboard;
+    // connection was heavy (a new capture session + input objects;
     // Windows: a new D3D device) and made the daemon cost scale with viewers.
     let input = shared_input();
     // Screen size comes from the shared capture, never a per-connection capture:
@@ -609,9 +491,7 @@ fn handle(stream: TcpStream) -> Result<(), String> {
         }),
         audio_on: std::sync::atomic::AtomicBool::new(false),
         input,
-        // (input is Option<Mutex<X11>>)
-        #[cfg(not(windows))]
-        clipboard: Mutex::new(String::new()),
+        // (input is Option<Mutex<Input>>)
     });
 
     // Hello (EST.md): version, codec, w, h, fps.
@@ -737,7 +617,6 @@ fn dispatch(conn: &Arc<Conn>, typ: u8, b: &[u8]) -> Result<(), String> {
                     ]);
                     let down = b[1 + n + 4] != 0;
                     conn.with_input(|x| {
-                        #[cfg(windows)]
                         {
                             let shift: u16 = 0x10; // VK_SHIFT
                             // A single-character name is a literal character (a
@@ -763,41 +642,12 @@ fn dispatch(conn: &Arc<Conn>, typ: u8, b: &[u8]) -> Result<(), String> {
                                 }
                             }
                         }
-                        #[cfg(not(windows))]
-                        {
-                            // Single-char name = a literal character (Ctrl+C);
-                            // multi-char = a named key ("Return", "F5", …).
-                            let mut handled = false;
-                            if !name.is_empty() {
-                                if let Some(k) = key_by_name(name) {
-                                    x.key(k as u16, down);
-                                    handled = true;
-                                }
-                            }
-                            let c = if !handled && !name.is_empty() && name.chars().count() == 1 {
-                                name.chars().next().unwrap()
-                            } else {
-                                char::from_u32(ch).unwrap_or('\0')
-                            };
-                            if !handled && c != '\0' {
-                                if let Some((k, need_shift)) = char_keycode(c) {
-                                if need_shift {
-                                    x.key(50, down);
-                                }
-                                x.key(k as u16, down);
-                                if need_shift {
-                                    x.key(50, !down);
-                                }
-                            }
-                        }
-                        }
                     });
                 }
             }
         }
         T_TEXT => {
             conn.with_input(|x| {
-                #[cfg(windows)]
                 {
                     let shift: u16 = 0x10;
                     for ch in b {
@@ -809,26 +659,10 @@ fn dispatch(conn: &Arc<Conn>, typ: u8, b: &[u8]) -> Result<(), String> {
                         }
                     }
                 }
-                #[cfg(not(windows))]
-                for ch in b {
-                    if let Some((kc, need_shift)) = char_keycode(*ch as char) {
-                        if need_shift {
-                            x.key(50, true);
-                        }
-                        x.key(kc as u16, true);
-                        x.key(kc as u16, false);
-                        if need_shift {
-                            x.key(50, false);
-                        }
-                    }
-                }
             });
         }
         T_CLIP_GET => {
-            #[cfg(windows)]
             let text = win_clip::get();
-            #[cfg(not(windows))]
-            let text = conn.clipboard.lock().unwrap().clone();
             let mut p = Vec::with_capacity(8 + text.len());
             p.extend_from_slice(&0u32.to_be_bytes());
             p.extend_from_slice(&(text.len() as u32).to_be_bytes());
@@ -840,10 +674,7 @@ fn dispatch(conn: &Arc<Conn>, typ: u8, b: &[u8]) -> Result<(), String> {
                 let n = u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as usize;
                 if b.len() >= 4 + n {
                     let text = String::from_utf8_lossy(&b[4..4 + n]).to_string();
-                    #[cfg(windows)]
                     win_clip::set(&text);
-                    #[cfg(not(windows))]
-                    { *conn.clipboard.lock().unwrap() = text; }
                 }
             }
         }
