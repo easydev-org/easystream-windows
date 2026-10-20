@@ -1,0 +1,137 @@
+name: release
+
+# Cross-compile the Windows est daemon (easystream.exe) for amd64 and arm64 and
+# attach both to the GitHub Release for the pushed tag.
+#
+# The Windows backend uses the `windows` crate (UIA / WGC / Media Foundation /
+# SendInput via compile-time bindings), so no Rust or Visual Studio is needed —
+# mingw-w64 on the Linux runner is enough, and the result is a single PE that
+# imports only system DLLs.
+#
+# The fiddly parts are pinned here because each one broke the container build in
+# a way that produced no error until link time:
+#
+#  * libopus must be CROSS-BUILT for mingw (build.rs compiles src/opusshim.cpp
+#    and links `static=opus`). Debian's libopus-dev is an amd64 package and is
+#    useless for a PE target.
+#  * FORTIFY must be off: mingw's string.h maps memcpy to __memcpy_chk, which its
+#    CRT does not provide, so the final link fails with undefined references.
+#    That means building libopus with -D_FORTIFY_SOURCE=0, not just the shims.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)build assets for"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  OPUS_VERSION: "1.4"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: amd64, target: x86_64-pc-windows-gnu, host: x86_64-w64-mingw32 }
+          - { arch: arm64, target: aarch64-pc-windows-gnullvm, host: aarch64-w64-mingw32 }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: mingw toolchain
+        run: |
+          sudo apt-get update
+          # amd64-gnu uses the classic mingw-w64 cross gcc; arm64 uses the
+          # gnullvm target (the aarch64 mingw gcc in Debian is not a full
+          # cross toolchain for rust's gnu flavour).
+          if [ "${{ matrix.arch }}" = "amd64" ]; then
+            sudo apt-get install -y --no-install-recommends \
+              gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 pkg-config
+          else
+            sudo apt-get install -y --no-install-recommends \
+              clang lld llvm pkg-config
+          fi
+
+      # libopus for the PE target, built from source. Both flags matter:
+      # --host selects the mingw toolchain, -D_FORTIFY_SOURCE=0 keeps the objects
+      # free of __memcpy_chk (see the note at the top).
+      - name: cross-build libopus
+        run: |
+          set -eux
+          curl -fsSL -o /tmp/opus.tgz \
+            "https://downloads.xiph.org/releases/opus/opus-${OPUS_VERSION}.tar.gz"
+          tar xzf /tmp/opus.tgz -C /tmp
+          cd "/tmp/opus-${OPUS_VERSION}"
+          CFLAGS="-D_FORTIFY_SOURCE=0 -O2" \
+          ./configure --host=${{ matrix.host }} --prefix=/usr/local \
+                      --disable-shared --enable-static \
+                      --disable-doc --disable-extra-programs
+          make -j"$(nproc)"
+          sudo make install
+          ls -l /usr/local/lib/libopus.a /usr/local/include/opus/opus.h
+
+      - name: fetch the shared web UI
+        run: bash build-webui.sh
+
+      - name: cargo test
+        run: cargo test --release --target ${{ matrix.target }}
+
+      - name: build
+        env:
+          CC_x86_64_pc_windows_gnu: x86_64-w64-mingw32-gcc
+          CXX_x86_64_pc_windows_gnu: x86_64-w64-mingw32-g++
+          CARGO_TARGET_AARCH64_PC_WINDOWS_GNULLVM_LINKER: clang
+          CC_aarch64_pc_windows_gnullvm: clang
+          CXX_aarch64_pc_windows_gnullvm: clang++
+          CFLAGS: -D_FORTIFY_SOURCE=0
+          CXXFLAGS: -D_FORTIFY_SOURCE=0
+        run: |
+          set -euo pipefail
+          cargo build --release --target ${{ matrix.target }}
+          out="easystream-windows-${{ matrix.arch }}.exe"
+          cp "target/${{ matrix.target }}/release/easystream.exe" "/tmp/$out"
+          ls -l "/tmp/$out"
+          # A PE starts with "MZ". Catching a non-PE here is cheaper than
+          # discovering it in the guest.
+          head -c 2 "/tmp/$out" | od -An -tx1 | grep -q '4d 5a' \
+            || { echo "::error::$out is not a PE"; exit 1; }
+          echo "ARTIFACT=$out" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.arch }}
+          path: /tmp/easystream-windows-*
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: /tmp/assets
+          merge-multiple: true
+      - run: ls -l /tmp/assets
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: /tmp/assets/easystream-windows-*
+          fail_on_unmatched_files: true
+          generate_release_notes: false
