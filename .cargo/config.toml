@@ -1,9 +1,0 @@
-# Resolve crates from the in-cluster artifact cargo registry (a crates.io
-# mirror). It is a plain-HTTP sparse registry reachable only inside the cluster,
-# so no proxy / TLS setup is needed. Keeping this here (not vendoring) is what
-# makes a fresh `cargo build` work with no extra steps.
-[source.crates-io]
-replace-with = "artifact"
-
-[source.artifact]
-registry = "sparse+http://artifact.worker.svc.cluster.local/artifacts/cargo/index/"

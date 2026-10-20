@@ -7,21 +7,55 @@ ARG REGISTRY=docker.io/library
 FROM ${REGISTRY}/rust:1-bookworm
 
 ARG WEBUI_REF=main
-ARG HTTPS_PROXY
-ARG HTTP_PROXY
-ENV HTTPS_PROXY=${HTTPS_PROXY} HTTP_PROXY=${HTTP_PROXY} \
-    CARGO_HOME=/usr/local/cargo \
+# Plain, self-contained build: no proxy settings, no private registries, no
+# mirror addresses. It behaves identically on a laptop, on CI, and in a cluster.
+# Egress configuration belongs to the builder, not to this file.
+ENV CARGO_HOME=/usr/local/cargo \
     PATH=/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # mingw-w64 is the only host tool needed to cross-compile the PE.
-# Debian packages come from the in-cluster artifact mirror (the build node has
-# no route to deb.debian.org). rust:1-bookworm is Debian 12 (bookworm).
-ARG ARTIFACT=http://artifact.worker.svc.cluster.local
+# Packages come from Aliyun over HTTPS (see the note in the Linux image: HTTPS,
+# because some egress proxies refuse plain http:// and report it misleadingly as
+# a missing Release file).
 RUN rm -f /etc/apt/sources.list.d/* /etc/apt/sources.list \
-    && printf 'deb [trusted=yes] %s/artifacts/debian/debian bookworm main\n' "${ARTIFACT}" > /etc/apt/sources.list.d/artifact.list \
+    && printf 'deb https://mirrors.aliyun.com/debian bookworm main\n' > /etc/apt/sources.list \
+    && printf 'deb https://mirrors.aliyun.com/debian bookworm-updates main\n' >> /etc/apt/sources.list \
     && echo 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/80-retries \
     && apt-get update && apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64 \
+      g++-mingw-w64-x86-64 \
+      pkg-config curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+
+# libopus, CROSS-BUILT for the mingw target.
+#
+# build.rs compiles src/opusshim.cpp against opus/opus.h and links
+# `static=opus` for x86_64-pc-windows-gnu — it expects the library to already
+# exist at /usr/local (see the note in build.rs: "libopus.a is cross-built and
+# installed to /usr/local"). The Debian libopus-dev package is an amd64 build and
+# is useless for a PE target, and the Containerfile never built one, so the image
+# could not produce a Windows binary at all:
+#   fatal error: opus/opus.h: No such file or directory
+# Building it from source here keeps the image self-contained (no prebuilt blob).
+ARG OPUS_VERSION=1.4
+RUN set -eux; \
+    cd /tmp; \
+    curl -fsSL -o opus.tgz "https://downloads.xiph.org/releases/opus/opus-${OPUS_VERSION}.tar.gz"; \
+    tar xzf opus.tgz; \
+    cd "opus-${OPUS_VERSION}"; \
+    # -D_FORTIFY_SOURCE=0: mingw's string.h maps memcpy/memset to __memcpy_chk /
+    # __memset_chk when FORTIFY is on, and Debian's gcc specs turn it on by
+    # default — but the mingw CRT has no such symbols, so anything built here (and
+    # later linked into the PE) fails at link time with
+    #   string.h:202: undefined reference to `__memcpy_chk'
+    # FORTIFY is a glibc hardening feature that means nothing for a PE target.
+    CFLAGS="-D_FORTIFY_SOURCE=0 -O2" \
+    ./configure --host=x86_64-w64-mingw32 --prefix=/usr/local \
+               --disable-shared --enable-static \
+               --disable-doc --disable-extra-programs; \
+    make -j"$(nproc)"; \
+    make install; \
+    cd /tmp; rm -rf opus.tgz "opus-${OPUS_VERSION}"; \
+    ls -la /usr/local/lib/libopus.a /usr/local/include/opus/opus.h
 
 WORKDIR /src
 COPY . /src/
@@ -31,7 +65,24 @@ RUN bash /src/build-webui.sh && ls -la /src/webui
 # rustup fetches its components from static.rust-lang.org, which the build proxy
 # cannot reach (it only fronts github). Run rustup WITHOUT the proxy; the webui
 # fetch above is the only step that needs it.
-RUN env -u HTTPS_PROXY -u HTTP_PROXY -u https_proxy -u http_proxy \
-      rustup target add x86_64-pc-windows-gnu
-RUN cargo build --release --manifest-path /src/Cargo.toml --target x86_64-pc-windows-gnu
+# The proxy must stay ENABLED here. This used to strip it (`env -u HTTPS_PROXY
+# ...`), and static.rust-lang.org is not reachable without it:
+#   component download failed for rust-std-x86_64-pc-windows-gnu ...
+#   tcp connect error: Connection timed out (os error 110)
+# so the Windows target could never be installed and the image never built.
+RUN rustup target add x86_64-pc-windows-gnu
+# -D_FORTIFY_SOURCE=0 for the mingw target.
+#
+# mingw's string.h redirects memcpy/memset to __memcpy_chk / __memset_chk when
+# _FORTIFY_SOURCE is on (it is on by default in Debian's gcc specs), but the
+# mingw CRT does not provide those symbols, so the final link fails with
+#
+#   /usr/share/mingw-w64/include/string.h:202: undefined reference to `__memcpy_chk'
+#   collect2: error: ld returned 1 exit status
+#
+# FORTIFY is a glibc hardening feature with no meaning for the PE target, so
+# turning it off is the correct fix rather than pulling in another library.
+RUN CFLAGS="-D_FORTIFY_SOURCE=0" CXXFLAGS="-D_FORTIFY_SOURCE=0" \
+    RUSTFLAGS="-C link-arg=-Wl,--allow-multiple-definition" \
+    cargo build --release --manifest-path /src/Cargo.toml --target x86_64-pc-windows-gnu
 RUN cp /src/target/x86_64-pc-windows-gnu/release/easystream.exe /easystream.exe
