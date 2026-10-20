@@ -91,22 +91,35 @@ jobs:
         run: cargo test --release
 
       - name: build
-        shell: bash
+        # POWERSHELL, not bash. With `shell: bash` the runner uses Git Bash, whose
+        # PATH puts /usr/bin ahead of the MSVC tools, so cargo resolved the linker
+        # to Git's own `link.exe` — which is coreutils' hard-link utility:
+        #
+        #   "C:\Program Files\Git\usr\bin\link.exe" "/NOLOGO" ...
+        #   /usr/bin/link: extra operand 'user32.lib'
+        #
+        # Every link would fail that way, with a message about repairing the Visual
+        # Studio build tools that points at nothing.
+        shell: pwsh
         run: |
-          set -euo pipefail
+          $ErrorActionPreference = "Stop"
           cargo build --release
-          out="easystream-windows-${{ matrix.arch }}.exe"
-          # $RUNNER_TEMP, not /tmp: on a Windows runner /tmp is not the temp dir
-          # the upload step looks in, and a hard-coded Unix path silently produced
-          # an empty artifact.
-          mkdir -p "$RUNNER_TEMP/out"
-          cp target/release/easystream.exe "$RUNNER_TEMP/out/$out"
-          ls -l "$RUNNER_TEMP/out/$out"
+          if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
+
+          $out = "easystream-windows-${{ matrix.arch }}.exe"
+          $dir = Join-Path $env:RUNNER_TEMP "out"
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          $dst = Join-Path $dir $out
+          Copy-Item "target\release\easystream.exe" $dst
+
           # A PE starts with "MZ"; catching a non-PE here is cheaper than
           # discovering it inside the guest.
-          head -c 2 "$RUNNER_TEMP/out/$out" | od -An -tx1 | grep -q '4d 5a' \
-            || { echo "::error::$out is not a PE"; exit 1; }
-          echo "ARTIFACT=$out" >> "$GITHUB_ENV"
+          $magic = [System.IO.File]::ReadAllBytes($dst)[0..1]
+          if ($magic[0] -ne 0x4D -or $magic[1] -ne 0x5A) {
+            throw "$out is not a PE (magic $($magic -join ','))"
+          }
+          Get-Item $dst | Select-Object Length, FullName
+          "ARTIFACT=$out" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - uses: actions/upload-artifact@v4
         with:
