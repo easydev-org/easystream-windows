@@ -56,14 +56,30 @@ jobs:
         with:
           key: ${{ matrix.arch }}
 
+      # MSVC must be on the environment or build.rs cannot compile its C++ shim:
+      #
+      #   error: failed to run custom build command for `easystream`
+      #   VCINSTALLDIR = None
+      #   WindowsSdkDir = None
+      #
+      # A windows-latest runner HAS Visual Studio installed, but its variables are
+      # not exported until vcvars is run — which is what this action does.
+      - name: set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.arch == 'arm64' && 'arm64' || 'x64' }}
+
       # vcpkg supplies libopus for the native target — no cross build needed.
       - name: libopus
         shell: pwsh
         run: |
           $vcpkg = $env:VCPKG_INSTALLATION_ROOT
-          & "$vcpkg\vcpkg.exe" install opus:x64-windows-static-md
-          echo "VCPKGRS_TRIPLET=x64-windows-static-md" | Out-File -FilePath $env:GITHUB_ENV -Append
-          echo "PKG_CONFIG_PATH=$vcpkg\installed\x64-windows-static-md\lib\pkgconfig" | Out-File -FilePath $env:GITHUB_ENV -Append
+          # The triplet follows the target: x64 for amd64, arm64 for arm64.
+          $triplet = if ("${{ matrix.arch }}" -eq "arm64") { "arm64-windows-static-md" } else { "x64-windows-static-md" }
+          & "$vcpkg\vcpkg.exe" install "opus:$triplet"
+          echo "VCPKGRS_TRIPLET=$triplet" | Out-File -FilePath $env:GITHUB_ENV -Append
+          echo "PKG_CONFIG_PATH=$vcpkg\installed\$triplet\lib\pkgconfig" | Out-File -FilePath $env:GITHUB_ENV -Append
+          echo "installed opus:$triplet"
 
       # The SPA lives in another repository and build.rs inlines it.
       - name: fetch the shared web UI
