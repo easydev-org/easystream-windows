@@ -1,0 +1,60 @@
+name: ci
+
+# Check every push and pull request: build and test the crate.
+#
+# release.yml is tag-only, so until now a push to main ran NOTHING. A change that
+# broke the build sat there until someone cut a release and watched it fail.
+#
+# This is deliberately the same steps as release.yml's build job — the point is
+# that the release and the pre-release check compile the same code the same way,
+# so a green PR really does predict a green release.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Everything build.rs probes for. Without libpipewire-0.3-dev the portal
+      # backend is skipped silently and the link of na_portal_* fails outright, so
+      # a missing package here is a confusing error rather than a clear one.
+      - name: system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config \
+            libdbus-1-dev libx264-dev libyuv-dev libopus-dev \
+            libpipewire-0.3-dev \
+            libxcb1-dev libxcb-xtest0-dev libxcb-shm0-dev \
+            libxcb-xfixes0-dev libxcb-render0-dev \
+            libwayland-dev libxkbcommon-dev
+
+      # The SPA is fetched, not vendored, and build.rs inlines it.
+      - name: fetch the shared web UI
+        run: bash build-webui.sh
+
+      # fmt is advisory for the same reason: reformatting the tree is a separate
+      # change from whatever the PR is about.
+      - run: cargo fmt --all -- --check
+        continue-on-error: true
+
+      # Not -D warnings: the crates carry existing warnings, and failing on them here
+      # would make the first CI run red for reasons nobody just introduced.
+      - run: cargo clippy --all-targets
+
+      - run: cargo test --release
