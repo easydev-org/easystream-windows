@@ -19,6 +19,7 @@ mod uia;
 // Windows backend (UIA / WGC / MF / SendInput) uses the `windows` crate.
 mod win;
 mod win_enc;
+mod vcfg;
 
 use std::env;
 

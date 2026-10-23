@@ -104,6 +104,9 @@ pub fn authorize(token: Option<&str>) -> Mode {
 pub fn is_mutation(typ: u8) -> bool {
     matches!(
         typ,
+        // ConfigSet changes what EVERY viewer receives: a read-only viewer must
+        // not be able to force a quality on everybody watching.
+        0x08 |
         0x10 | 0x11 | 0x12 | 0x13 | 0x14   // pointer + keyboard
         | 0x26                              // a11y ActionReq
         | 0x32                              // ClipSet

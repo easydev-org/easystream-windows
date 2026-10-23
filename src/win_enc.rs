@@ -126,6 +126,21 @@ impl MfEncoder {
     /// encode one BGRA frame, returning an Annex-B access unit (may be empty
     /// while the encoder buffers).
     pub fn encode(&mut self, bgra: &[u8]) -> Result<Vec<Vec<u8>>, String> {
+        let w = self.width;
+        let h = self.height;
+        self.encode_sized(bgra, w, h)
+    }
+
+    /// encode_sized encodes a frame whose CAPTURE geometry may differ from the
+    /// encoder's. Scaling happens here because the screen source only offers one
+    /// size (WGC hands back the desktop's), so the encoder is the first place
+    /// that legitimately owns an output geometry.
+    pub fn encode_sized(
+        &mut self,
+        bgra: &[u8],
+        src_w: u32,
+        src_h: u32,
+    ) -> Result<Vec<Vec<u8>>, String> {
         unsafe {
             // Convert into a REUSED buffer: allocating a fresh ~3 MB NV12 Vec
             // every frame (30 fps) churned the guest's tight memory until an
@@ -134,7 +149,11 @@ impl MfEncoder {
             if self.nv12.len() != need {
                 self.nv12.resize(need, 0);
             }
-            bgra_to_nv12_into(bgra, self.width, self.height, &mut self.nv12);
+            if src_w == self.width && src_h == self.height {
+                bgra_to_nv12_into(bgra, self.width, self.height, &mut self.nv12);
+            } else {
+                bgra_to_nv12_scaled(bgra, src_w, src_h, self.width, self.height, &mut self.nv12);
+            }
             // Queue the frame; the event pump feeds it when the MFT asks.
             self.pending_in_nv12 = true;
             let mut out = Vec::new();
@@ -323,6 +342,74 @@ fn bgra_to_nv12_into(bgra: &[u8], w: u32, h: u32, nv12: &mut [u8]) {
             let u = ((-29 * r - 99 * g + 128 * b + 128) >> 8) + 128;
             let v = ((128 * r - 116 * g - 12 * b + 128) >> 8) + 128;
             let uv = y_size + (j / 2) * w + i;
+            nv12[uv] = clamp_u8(u);
+            nv12[uv + 1] = clamp_u8(v);
+        }
+    }
+}
+
+/// bgra_to_nv12_scaled converts a frame whose CAPTURE size differs from the
+/// encoder's, scaling with bilinear sampling while converting to NV12.
+///
+/// Windows has no libyuv here, and the plain converter walks the source at 1:1.
+/// Bilinear rather than nearest-neighbour because the presets halve the
+/// resolution: at 2:1 a naive pick drops every other line and makes text shimmer.
+#[allow(clippy::too_many_arguments)]
+fn bgra_to_nv12_scaled(
+    bgra: &[u8],
+    sw: u32,
+    sh: u32,
+    dw: u32,
+    dh: u32,
+    nv12: &mut [u8],
+) {
+    let (sw, sh, dw, dh) = (sw as usize, sh as usize, dw as usize, dh as usize);
+    debug_assert_eq!(nv12.len(), dw * dh * 3 / 2);
+    let y_size = dw * dh;
+    // Precompute the source columns once per row instead of per pixel.
+    let mut xmap = vec![(0usize, 0usize, 0i32); dw];
+    for i in 0..dw {
+        let fx = (i as f32 + 0.5) * sw as f32 / dw as f32 - 0.5;
+        let x0 = fx.floor().max(0.0) as usize;
+        let x1 = (x0 + 1).min(sw - 1);
+        let w = ((fx - x0 as f32) * 256.0) as i32;
+        xmap[i] = (x0, x1, w);
+    }
+    for j in 0..dh {
+        let fy = (j as f32 + 0.5) * sh as f32 / dh as f32 - 0.5;
+        let y0 = fy.floor().max(0.0) as usize;
+        let y1 = (y0 + 1).min(sh - 1);
+        let wy = ((fy - y0 as f32) * 256.0) as i32;
+        let row0 = y0 * sw;
+        let row1 = y1 * sw;
+        for i in 0..dw {
+            let (x0, x1, wx) = xmap[i];
+            let p00 = (row0 + x0) * 4;
+            let p01 = (row0 + x1) * 4;
+            let p10 = (row1 + x0) * 4;
+            let p11 = (row1 + x1) * 4;
+            let mut c = [0i32; 3];
+            for k in 0..3 {
+                let a = bgra[p00 + k] as i32 * (256 - wx) + bgra[p01 + k] as i32 * wx;
+                let b = bgra[p10 + k] as i32 * (256 - wx) + bgra[p11 + k] as i32 * wx;
+                c[k] = ((a * (256 - wy) + b * wy) >> 16).clamp(0, 255);
+            }
+            let (b, g, r) = (c[0], c[1], c[2]);
+            nv12[j * dw + i] = clamp_u8(((54 * r + 183 * g + 18 * b + 128) >> 8) + 16);
+        }
+    }
+    for j in (0..dh).step_by(2) {
+        for i in (0..dw).step_by(2) {
+            // Sample the chroma at the source position corresponding to (i,j).
+            let sx = ((i as f32 + 0.5) * sw as f32 / dw as f32) as usize;
+            let sy = ((j as f32 + 0.5) * sh as f32 / dh as f32) as usize;
+            let sx = sx.min(sw - 1);
+            let sy = sy.min(sh - 1);
+            let o = (sy * sw + sx) * 4;
+            let (b, g, r) = (bgra[o] as i32, bgra[o + 1] as i32, bgra[o + 2] as i32);
+            let u = ((-29 * r - 99 * g + 128 * b + 128) >> 8) + 128;
+            let v = ((128 * r - 116 * g - 12 * b + 128) >> 8) + 128;
+            let uv = y_size + (j / 2) * dw + i;
             nv12[uv] = clamp_u8(u);
             nv12[uv + 1] = clamp_u8(v);
         }
