@@ -20,7 +20,19 @@ permissions:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    # WINDOWS RUNNER, not ubuntu.
+    #
+    # This job was copied from the Linux repo and kept its ubuntu-latest runner
+    # and its apt list (libpipewire, libxcb, libwayland), none of which this crate
+    # uses. Its sources live in src/uia.rs and src/win.rs and call the `windows`
+    # crate, which is a cfg(windows) dependency: on a Linux runner that crate is
+    # simply absent, so `cargo check` failed with thirteen "cannot find module or
+    # crate `windows`" errors. It had been red since it was added, which defeats
+    # the whole point of a pre-release check.
+    #
+    # release.yml already builds on windows-latest; this now matches it, so a
+    # green push really does predict a green release.
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -29,20 +41,6 @@ jobs:
           components: clippy, rustfmt
 
       - uses: Swatinem/rust-cache@v2
-
-      # Everything build.rs probes for. Without libpipewire-0.3-dev the portal
-      # backend is skipped silently and the link of na_portal_* fails outright, so
-      # a missing package here is a confusing error rather than a clear one.
-      - name: system libraries
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential pkg-config \
-            libdbus-1-dev libx264-dev libyuv-dev libopus-dev \
-            libpipewire-0.3-dev \
-            libxcb1-dev libxcb-xtest0-dev libxcb-shm0-dev \
-            libxcb-xfixes0-dev libxcb-render0-dev \
-            libwayland-dev libxkbcommon-dev
 
       # The SPA is fetched, not vendored, and build.rs inlines it.
       - name: fetch the shared web UI
@@ -55,6 +53,9 @@ jobs:
 
       # Not -D warnings: the crates carry existing warnings, and failing on them here
       # would make the first CI run red for reasons nobody just introduced.
+      # MSVC must be on the environment or build.rs cannot compile its C++ shim.
+      - uses: ilammy/msvc-dev-cmd@v1
+
       - run: cargo clippy --all-targets
 
       - run: cargo test --release
