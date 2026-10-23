@@ -55,6 +55,21 @@ jobs:
       # would make the first CI run red for reasons nobody just introduced.
       # MSVC must be on the environment or build.rs cannot compile its C++ shim.
       - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      # vcpkg supplies libopus for the native target. Without it build.rs panics
+      # with "opus headers not found", which is what this job hit the moment it
+      # moved to a Windows runner: the apt list it inherited from the Linux repo
+      # had libopus-dev, and nothing replaces that on Windows.
+      - name: libopus
+        shell: pwsh
+        run: |
+          $vcpkg = $env:VCPKG_INSTALLATION_ROOT
+          $triplet = "x64-windows-static-md"
+          & "$vcpkg\vcpkg.exe" install "opus:$triplet"
+          echo "VCPKGRS_TRIPLET=$triplet" | Out-File -FilePath $env:GITHUB_ENV -Append
+          echo "PKG_CONFIG_PATH=$vcpkg\installed\$triplet\lib\pkgconfig" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - run: cargo clippy --all-targets
 
