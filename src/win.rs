@@ -13,7 +13,6 @@
 #![allow(non_snake_case)]
 
 use std::ffi::c_void;
-use std::sync::OnceLock;
 
 use windows::core::Interface;
 use windows::Win32::Foundation::{HWND, POINT};
@@ -35,10 +34,23 @@ use windows::Graphics::DirectX::DirectXPixelFormat;
 
 /// COM apartment init, once per process.
 pub fn init() {
-    static ONCE: OnceLock<()> = OnceLock::new();
-    ONCE.get_or_init(|| unsafe {
-        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
-    });
+    // CoInitializeEx is PER THREAD. A OnceLock here was wrong and cost a day of
+    // debugging: the first caller (the main thread, when the daemon starts)
+    // initialised COM, the OnceLock then made every later call a no-op, and the
+    // capture pump thread ran with COM UNINITIALISED. WGC does not fail loudly
+    // in that state - Direct3D11CaptureFramePool::CreateFreeThreaded and
+    // TryGetNextFrame simply never deliver a frame, so the daemon opened an
+    // encoder and then encoded nothing, forever, with a healthy-looking log.
+    //
+    // A thread_local keeps the once-per-thread semantics without needing to
+    // track lifetimes: RPC_E_CHANGED_MODE (already initialised, different
+    // apartment) is harmless and ignored.
+    thread_local! {
+        static COM_READY: () = unsafe {
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        };
+    }
+    COM_READY.with(|_| ());
 }
 
 // ── capture (WGC) ───────────────────────────────────────────────────────────
