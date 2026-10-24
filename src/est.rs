@@ -125,6 +125,10 @@ const T_HELLO: u8 = 0x01;
 /// the encoder and answers with ConfigAck, then a fresh Hello.
 const T_CONFIG_SET: u8 = 0x08;
 const T_CONFIG_ACK: u8 = 0x09;
+/// Ask for an IDR without changing any configuration (EST.md 0x0A). The latch it
+/// sets is the one a new subscriber sets, so N requests in one frame interval
+/// produce exactly one IDR.
+const T_KEYFRAME_REQ: u8 = 0x0A;
 const T_VIDEO: u8 = 0x02;
 const T_MOVE: u8 = 0x10;
 const T_BUTTON: u8 = 0x11;
@@ -272,6 +276,13 @@ struct Broadcaster {
 }
 
 impl Broadcaster {
+    /// request_keyframe asks the pump for an IDR on its next frame. Idempotent:
+    /// the latch is shared, so a client asking every frame still gets one IDR per
+    /// frame interval.
+    fn request_keyframe(&self) {
+        self.new_sub.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
     fn subscribe(&self) -> mpsc::Receiver<Arc<Vec<u8>>> {
         // Bounded so a slow/stalled viewer cannot grow an unbounded backlog in
         // the daemon (it just drops frames for THAT viewer).
@@ -732,6 +743,12 @@ fn dispatch(conn: &Arc<Conn>, typ: u8, b: &[u8]) -> Result<(), String> {
         conn.mode.store(mode as u8, std::sync::atomic::Ordering::SeqCst);
         let _ = conn.write_frame(T_AUTH_OK, &[mode as u8]);
         eprintln!("est: auth -> {:?}", mode);
+        return Ok(());
+    }
+    if typ == T_KEYFRAME_REQ {
+        // Not a mutation: no guest state changes, so a read-only viewer may use
+        // it. Refusing would strand that viewer on a corrupt picture.
+        broadcaster().request_keyframe();
         return Ok(());
     }
     if typ == T_CONFIG_SET {
