@@ -553,9 +553,18 @@ fn pump(bc: Arc<Broadcaster>) {
                     // gating on "changed" starves it and it never emits. The
                     // encoder's own rate control drops redundant frames.
                     if warmup > 0 { warmup -= 1; }
-                    // Same reason: px is a capture-sized BGRA buffer.
-                    let r = enc.as_mut().unwrap().encode_ptr_sized(
-                        px.as_ptr(), px.len() as u32, cap_w, cap_h);
+                    // encode(), not encode_ptr_sized(): the encoder emits exactly
+                    // the size it was opened with, and this buffer is that size.
+                    //
+                    // Passing (ptr, len, cap_w, cap_h) separately was the change
+                    // that broke Windows capture. When cap_w*cap_h*4 and the
+                    // buffer length disagree by even one byte, the slice handed
+                    // to the converter is the wrong length and the NV12 pass reads
+                    // past it - and Media Foundation then accepts the input and
+                    // emits nothing at all, which is the silent failure this build
+                    // was chasing. Letting the Vec carry its own length removes
+                    // the chance of them disagreeing.
+                    let r = enc.as_mut().unwrap().encode(px);
                     if let Err(e) = &r { eprintln!("est pump: encode {e}"); }
                     (true, r.ok())
                 } else {
