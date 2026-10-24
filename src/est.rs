@@ -533,6 +533,20 @@ fn pump(bc: Arc<Broadcaster>) {
                 } else {
                     skipped += 1;
                 }
+                // Diagnostic: WGC returning no frame forever is the failure this
+                // build is chasing, and it is silent otherwise.
+                {
+                    static G: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+                    let n = G.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if n < 5 || n % 150 == 0 {
+                        eprintln!(
+                            "est pump: grab got={} skipped={} last={:?} cap={}x{}",
+                            got, skipped,
+                            last.as_ref().map(|v| v.len()),
+                            cap_w, cap_h
+                        );
+                    }
+                }
                 if let Some(px) = last.as_ref() {
                     // The MS encoder needs a CONTINUOUS input timeline, so feed it
                     // on every tick (the last frame when the screen is static) —
